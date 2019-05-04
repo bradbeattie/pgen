@@ -137,8 +137,8 @@ if __name__ == "__main__":
             shortpass = args.shortpass
         else:
             shortpass = getpass("Password? ")
-            if args.add:
-                assert shortpass == getpass("Password (confirm)? ")
+            if args.add and shortpass != getpass("Password (confirm)? "):
+                raise Exception("Provided passwords didn't match")
 
         salt = read_salt(args.salt_filename)
         checksums = read_checksums(args.checksums_filename)
