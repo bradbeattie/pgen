@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-
-from getpass import getpass
 from argparse import ArgumentParser, Namespace
+from getpass import getpass
 import base64
 import hashlib
 import json
 import logging
 import os
 import secrets
+import time
 
 
 SHORT_SALT_BYTES = 10000
@@ -19,11 +19,11 @@ def parse_args():
     parser = ArgumentParser(description="Generate a password")
     parser.add_argument("domains", nargs="+")
     parser.add_argument("--add", action="store_true", help="Record unrecognized domains")
-    parser.add_argument("--pepper", action="store_true", help="Modify domain-specific salts")
+    parser.add_argument("--modify-pepper", action="store_true", help="Modify domain-specific salts")
     parser.add_argument("--salt", dest="salt_filename", default=DEFAULT_SALT_FILENAME, help=f"Where the salt is stored, defaults to {DEFAULT_SALT_FILENAME}")
     parser.add_argument("--checksum", dest="checksums_filename", default=DEFAULT_CHECKSUM_FILENAME, help=f"Where known checksums are stored, defaults to {DEFAULT_CHECKSUM_FILENAME}")
-    parser.add_argument("--hash-method", default="sha512", help=", ".join(hashlib.algorithms_guaranteed))
-    parser.add_argument("--encoding-method", default="b85encode", help=", ".join(f"{p}encode" for p in ("b16", "b32", "b64", "b85", "a85")))
+    parser.add_argument("--hash", dest="hash_method", default="sha512", help=", ".join(hashlib.algorithms_guaranteed))
+    parser.add_argument("--encoding", dest="encoding_method", default="b85encode", help=", ".join(f"{p}encode" for p in ("b16", "b32", "b64", "b85", "a85")))
     parser.add_argument("--shortpass", help="Command-line provided shortpass, preferably for debugging purposes")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show debug statements")
     return parser.parse_args()
@@ -110,7 +110,7 @@ def handle_domain(domain: str, shortpass: str, salt: bytes, checksums: dict, arg
     if not config:
         raise Exception(f"{domain}: Checksum not found")
 
-    if args.pepper:
+    if args.modify_pepper:
         logging.debug(f"{domain}: Pepper modified")
         config["pepper"] = base64.b64encode(secrets.token_bytes(4))[:4].decode()
 
@@ -120,8 +120,11 @@ def handle_domain(domain: str, shortpass: str, salt: bytes, checksums: dict, arg
 
 def display_results(results: dict) -> None:
     width = max(map(len, results))
-    for domain, longpass in results.items():
-        print(f"""{domain:>{width}}: {longpass}""")
+    if len(results) > 1:
+        for domain, longpass in results.items():
+            print(f"""{domain:>{width}}: {longpass}""")
+    else:
+        print("".join(results.values()))
 
 
 if __name__ == "__main__":
@@ -152,7 +155,7 @@ if __name__ == "__main__":
         if results:
             display_results(results)
 
-        if args.add or args.pepper and results:
+        if args.add or args.modify_pepper and results:
             write_checksums(args.checksums_filename, checksums)
 
     except KeyboardInterrupt:
