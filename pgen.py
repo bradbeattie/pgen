@@ -9,10 +9,12 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 
 
-SCRIPT_LENGTH_MAX = 200  # Don't bump this
+SCRIPT_MAX_ROWS = 200  # Don't bump this
+SCRIPT_MAX_BYTES = 8000  # Don't bump this
 SHORT_SALT_BYTES = 10000
 DEFAULT_SALT_FILENAME = "~/.pgen.salt"
 DEFAULT_CHECKSUM_FILENAME = "~/.pgen.checksums"
@@ -74,11 +76,14 @@ def main():
 
 def ensure_script_is_simple():
     """Warn the user if the script grows beyond a defined threshold of lines"""
-    lines = len(open(__file__).readlines())
-    if lines > SCRIPT_LENGTH_MAX:
-        logging.warning(f"""This script has {lines} lines. If it grows too complex, new users may not be able to easily audit it.""")
-    else:
-        logging.debug(f"""This script has {lines} lines.""")
+    content = open(__file__).read()
+    content_bytes = len(content)
+    content_lines = len(content.splitlines())  # or use tokenize to not penalize comments?
+    if content_bytes > SCRIPT_MAX_BYTES or content_lines > SCRIPT_MAX_ROWS:
+        logging.warning(f"""
+            This script has {content_bytes} bytes and {content_lines} lines.
+            If it grows too complex, new users may not be able to easily audit it.
+        """)
 
 
 def smell(b: bytes) -> str:
@@ -120,14 +125,14 @@ def write_checksums(checksums_filename: str, checksums: dict) -> None:
         checksums_file.write(json.dumps(checksums, indent=4, sort_keys=True))
 
 
-def get_digest(args: Namespace, *digest_args) -> bytes:
-    """Using the preferred hashing method, combines any and returns a digest"""
+def get_digest(args: Namespace, *blocks) -> bytes:
+    """Using the preferred hashing method, combines the given blocks and returns a digest"""
     prehash = b"".join(
         arg.encode() if isinstance(arg, str) else arg
-        for arg in list(digest_args)
+        for arg in list(blocks)
     )
     if len(prehash) < SHORT_SALT_BYTES:
-        raise Exception("Digest args are unusually short")
+        raise Exception("Combined blocks are unusually short")
     return getattr(hashlib, args.hash_method)(prehash).digest()
 
 
