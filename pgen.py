@@ -12,7 +12,7 @@ import os
 import secrets
 
 
-SCRIPT_LENGTH_MAX = 200
+SCRIPT_LENGTH_MAX = 200  # Don't bump this
 SHORT_SALT_BYTES = 10000
 DEFAULT_SALT_FILENAME = "~/.pgen.salt"
 DEFAULT_CHECKSUM_FILENAME = "~/.pgen.checksums"
@@ -35,39 +35,41 @@ def parse_args() -> Namespace:
 
 def main():
     """Main logic, stringing the other helper functions together"""
-    ensure_script_is_simple()
+
+    # Initial setup
     args = parse_args()
     logging.basicConfig(
         format="%(levelname)9s: %(message)s",
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
-    try:
+    ensure_script_is_simple()
 
-        if args.shortpass:
-            logging.warning(f"Careful! Shell histories log command-line parameters, like {args.shortpass}")
-            shortpass = args.shortpass
-        else:
-            shortpass = getpass("Password? ")
-            if args.add and shortpass != getpass("Password (confirm)? "):
-                raise Exception("Provided passwords didn't match")
+    # Get the shortpass from either args or by prompting the user
+    if args.shortpass:
+        logging.warning(f"Careful! Shell histories log command-line parameters, like {args.shortpass}")
+        shortpass = args.shortpass
+    else:
+        shortpass = getpass("Password? ")
+        if args.add and shortpass != getpass("Password (confirm)? "):
+            raise Exception("Provided passwords didn't match")
 
-        salt = read_salt(args.salt_filename)
-        checksums = read_checksums(args.checksums_filename)
+    # Read in disk-stored values
+    salt = read_salt(args.salt_filename)
+    checksums = read_checksums(args.checksums_filename)
 
-        results = {}
-        for domain in sorted(args.domains):
-            try:
-                results[domain] = handle_domain(domain, shortpass, salt, checksums, args)
-            except Exception as e:
-                logging.error(e)
-        if results:
-            display_results(results)
+    # Iterate over all domains, get the long passwords, and display them
+    results = {}
+    for domain in sorted(args.domains):
+        try:
+            results[domain] = get_longpass(domain, shortpass, salt, checksums, args)
+        except Exception as e:
+            logging.error(e)
+    if results:
+        display_results(results)
 
-        if args.add or args.modify_pepper and results:
-            write_checksums(args.checksums_filename, checksums)
-
-    except KeyboardInterrupt:
-        print()
+    # Write any config changes back to disk
+    if args.add or args.modify_pepper and results:
+        write_checksums(args.checksums_filename, checksums)
 
 
 def ensure_script_is_simple():
@@ -77,6 +79,11 @@ def ensure_script_is_simple():
         logging.warning(f"""This script has {lines} lines. If it grows too complex, new users may not be able to easily audit it.""")
     else:
         logging.debug(f"""This script has {lines} lines.""")
+
+
+def smell(b: bytes) -> str:
+    """Given some bytes, return a short human-recognizable hash"""
+    return base64.b85encode(hashlib.sha512(b).digest()).decode()[:8]
 
 
 def read_salt(salt_filename: str) -> bytes:
@@ -92,11 +99,6 @@ def read_salt(salt_filename: str) -> bytes:
         raise Exception("Salt is unusually short")
     logging.debug(f"Salt: Read salt that smells like {smell(salt)}")
     return salt
-
-
-def smell(b: bytes) -> str:
-    """Given some bytes, return a short human-recognizable hash"""
-    return base64.b85encode(hashlib.sha512(b).digest()).decode()[:8]
 
 
 def read_checksums(checksums_filename: str) -> dict:
@@ -129,29 +131,19 @@ def get_digest(args: Namespace, *digest_args) -> bytes:
     return getattr(hashlib, args.hash_method)(prehash).digest()
 
 
-def get_checksum(args: Namespace, domain: str, shortpass: str, salt: bytes) -> str:
-    """Given a domain, shortpass, and a salt, returns a checksum"""
-    digest = get_digest(args, domain, shortpass, salt)
+def get_longpass(domain: str, shortpass: str, salt: bytes, checksums: dict, args: Namespace) -> str:
+    """Returns a long, complex, and unique password"""
+
+    # Split the salt in two
+    shortsalt, longsalt = salt[:SHORT_SALT_BYTES], salt[SHORT_SALT_BYTES:]
+
+    # Compute the checksum
+    digest = get_digest(args, domain, shortpass, shortsalt)
     checksum = base64.b85encode(digest).decode()[:20]
     logging.debug(f"{domain}: Checksum computed: {checksum}")
-    return checksum
 
-
-def get_longpass(args: Namespace, domain: str, shortpass: str, salt: bytes, config: dict) -> str:
-    digest = get_digest(args, domain, shortpass, salt, config.get("pepper", ""))
-    encoding = getattr(base64, config["encoding"])(digest).decode()
-    return "".join((
-        config.get("prefix", ""),
-        encoding[:config.get("length", 20)],
-        config.get("suffix", ""),
-    ))
-
-
-def handle_domain(domain: str, shortpass: str, salt: bytes, checksums: dict, args: Namespace) -> str:
-    shortsalt, longsalt = salt[:SHORT_SALT_BYTES], salt[SHORT_SALT_BYTES:]
-    checksum = get_checksum(args, domain, shortpass, shortsalt)
+    # Using the checksum, get or create a config
     config = checksums.get(checksum)
-
     if args.add:
         if config:
             logging.warning(f"{domain}: Checksum already present")
@@ -162,19 +154,27 @@ def handle_domain(domain: str, shortpass: str, salt: bytes, checksums: dict, arg
             }
             checksums[checksum] = config
             logging.info(f"{domain}: Checksum added")
-
     if not config:
         raise Exception(f"{domain}: Checksum not found")
 
+    # If requested, modify the config's pepper
     if args.modify_pepper:
         logging.debug(f"{domain}: Pepper modified")
         config["pepper"] = base64.b64encode(secrets.token_bytes(4))[:4].decode()
 
+    # Now having obtained a config, generate and return a longpass
     logging.debug(f"{domain}: {config}")
-    return get_longpass(args, domain, shortpass, longsalt, config)
+    digest = get_digest(args, domain, shortpass, longsalt, config.get("pepper", ""))
+    encoding = getattr(base64, config["encoding"])(digest).decode()
+    return "".join((
+        config.get("prefix", ""),
+        encoding[:config.get("length", 20)],
+        config.get("suffix", ""),
+    ))
 
 
 def display_results(results: dict) -> None:
+    """Prints out all generated passwords"""
     if len(results) > 1:
         width = max(map(len, results))
         for domain, longpass in results.items():
@@ -187,4 +187,7 @@ def display_results(results: dict) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
