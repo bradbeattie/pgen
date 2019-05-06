@@ -70,7 +70,7 @@ def main():
         display_results(results)
 
     # Write any config changes back to disk
-    if args.add or args.modify_pepper and results:
+    if (args.add or args.modify_pepper) and results:
         write_checksums(args.checksums_filename, checksums)
 
 
