@@ -128,8 +128,8 @@ def write_checksums(checksums_filename: str, checksums: dict) -> None:
 def get_digest(args: Namespace, *blocks) -> bytes:
     """Using the preferred hashing method, combines the given blocks and returns a digest"""
     prehash = b"".join(
-        arg.encode() if isinstance(arg, str) else arg
-        for arg in list(blocks)
+        block.encode() if isinstance(block, str) else block
+        for block in list(blocks)
     )
     if len(prehash) < SHORT_SALT_BYTES:
         raise Exception("Combined blocks are unusually short")
