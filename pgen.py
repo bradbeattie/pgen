@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+"""
+    Generates hash-based domain-unique passwords.
+"""
 from argparse import ArgumentParser, Namespace
 from getpass import getpass
 import base64
@@ -7,15 +10,16 @@ import json
 import logging
 import os
 import secrets
-import time
 
 
+SCRIPT_LENGTH_MAX = 200
 SHORT_SALT_BYTES = 10000
 DEFAULT_SALT_FILENAME = "~/.pgen.salt"
 DEFAULT_CHECKSUM_FILENAME = "~/.pgen.checksums"
 
 
-def parse_args():
+def parse_args() -> Namespace:
+    """Converts command-line arguments into an argparse.Namespace object"""
     parser = ArgumentParser(description="Generate a password")
     parser.add_argument("domains", nargs="+")
     parser.add_argument("--add", action="store_true", help="Record unrecognized domains")
@@ -29,7 +33,54 @@ def parse_args():
     return parser.parse_args()
 
 
+def main():
+    """Main logic, stringing the other helper functions together"""
+    ensure_script_is_simple()
+    args = parse_args()
+    logging.basicConfig(
+        format="%(levelname)9s: %(message)s",
+        level=logging.DEBUG if args.verbose else logging.INFO,
+    )
+    try:
+
+        if args.shortpass:
+            logging.warning(f"Careful! Shell histories log command-line parameters, like {args.shortpass}")
+            shortpass = args.shortpass
+        else:
+            shortpass = getpass("Password? ")
+            if args.add and shortpass != getpass("Password (confirm)? "):
+                raise Exception("Provided passwords didn't match")
+
+        salt = read_salt(args.salt_filename)
+        checksums = read_checksums(args.checksums_filename)
+
+        results = {}
+        for domain in sorted(args.domains):
+            try:
+                results[domain] = handle_domain(domain, shortpass, salt, checksums, args)
+            except Exception as e:
+                logging.error(e)
+        if results:
+            display_results(results)
+
+        if args.add or args.modify_pepper and results:
+            write_checksums(args.checksums_filename, checksums)
+
+    except KeyboardInterrupt:
+        print()
+
+
+def ensure_script_is_simple():
+    """Warn the user if the script grows beyond a defined threshold of lines"""
+    lines = len(open(__file__).readlines())
+    if lines > SCRIPT_LENGTH_MAX:
+        logging.warning(f"""This script has {lines} lines. If it grows too complex, new users may not be able to easily audit it.""")
+    else:
+        logging.debug(f"""This script has {lines} lines.""")
+
+
 def read_salt(salt_filename: str) -> bytes:
+    """Given a filename, returns a large salt, generating one if necessary"""
     logging.debug(f"Salt: Reading from {salt_filename}")
     try:
         salt = open(os.path.expanduser(salt_filename), mode="rb").read()
@@ -44,10 +95,12 @@ def read_salt(salt_filename: str) -> bytes:
 
 
 def smell(b: bytes) -> str:
+    """Given some bytes, return a short human-recognizable hash"""
     return base64.b85encode(hashlib.sha512(b).digest()).decode()[:8]
 
 
 def read_checksums(checksums_filename: str) -> dict:
+    """Given a filename, returns a list of known checkums and their configurations"""
     logging.debug(f"Checksums: Reading from {checksums_filename}")
     try:
         checksums = json.loads(open(os.path.expanduser(checksums_filename), mode="rb").read())
@@ -59,12 +112,14 @@ def read_checksums(checksums_filename: str) -> dict:
 
 
 def write_checksums(checksums_filename: str, checksums: dict) -> None:
+    """Rewrites the checksums file with the most recent checksum content"""
     logging.debug(f"Writing checksums to {checksums_filename}")
     with open(os.path.expanduser(checksums_filename), mode="w") as checksums_file:
         checksums_file.write(json.dumps(checksums, indent=4, sort_keys=True))
 
 
 def get_digest(args: Namespace, *digest_args) -> bytes:
+    """Using the preferred hashing method, combines any and returns a digest"""
     prehash = b"".join(
         arg.encode() if isinstance(arg, str) else arg
         for arg in list(digest_args)
@@ -75,6 +130,7 @@ def get_digest(args: Namespace, *digest_args) -> bytes:
 
 
 def get_checksum(args: Namespace, domain: str, shortpass: str, salt: bytes) -> str:
+    """Given a domain, shortpass, and a salt, returns a checksum"""
     digest = get_digest(args, domain, shortpass, salt)
     checksum = base64.b85encode(digest).decode()[:20]
     logging.debug(f"{domain}: Checksum computed: {checksum}")
@@ -119,44 +175,16 @@ def handle_domain(domain: str, shortpass: str, salt: bytes, checksums: dict, arg
 
 
 def display_results(results: dict) -> None:
-    width = max(map(len, results))
     if len(results) > 1:
+        width = max(map(len, results))
         for domain, longpass in results.items():
             print(f"""{domain:>{width}}: {longpass}""")
     else:
+        # This edgecase has been separated out such that users might
+        # easily pipe single-domain passwords into their clipboard with
+        # whatever scripts their OS prefers (e.g. pbcopy, xclip, etc).
         print("".join(results.values()))
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    logging.basicConfig(
-        format="%(levelname)9s: %(message)s",
-        level=logging.DEBUG if args.verbose else logging.INFO,
-    )
-    try:
-
-        if args.shortpass:
-            logging.warning(f"Careful! Shell histories log command-line parameters, like {args.shortpass}")
-            shortpass = args.shortpass
-        else:
-            shortpass = getpass("Password? ")
-            if args.add and shortpass != getpass("Password (confirm)? "):
-                raise Exception("Provided passwords didn't match")
-
-        salt = read_salt(args.salt_filename)
-        checksums = read_checksums(args.checksums_filename)
-
-        results = {}
-        for domain in sorted(args.domains):
-            try:
-                results[domain] = handle_domain(domain, shortpass, salt, checksums, args)
-            except Exception as e:
-                logging.error(e)
-        if results:
-            display_results(results)
-
-        if args.add or args.modify_pepper and results:
-            write_checksums(args.checksums_filename, checksums)
-
-    except KeyboardInterrupt:
-        print()
+    main()
