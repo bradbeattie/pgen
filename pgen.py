@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-    Generates hash-based domain-unique passwords.
-"""
+"""Generates hash-based domain-unique passwords."""
 from argparse import ArgumentParser, Namespace
 from getpass import getpass
 import base64
@@ -15,9 +13,9 @@ import secrets
 
 SCRIPT_MAX_ROWS = 200  # Don't bump this
 SCRIPT_MAX_BYTES = 8000  # Don't bump this
-SHORT_SALT_BYTES = 10000
+SALT_SPLIT_AT_BYTES = 10000
 DEFAULT_SALT_FILENAME = "~/.pgen.salt"
-DEFAULT_CHECKSUM_FILENAME = "~/.pgen.checksums"
+DEFAULT_CONFIGS_FILENAME = "~/.pgen.checksums"
 
 
 def parse_args() -> Namespace:
@@ -27,7 +25,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--add", action="store_true", help="Record unrecognized domains")
     parser.add_argument("--modify-pepper", action="store_true", help="Modify domain-specific salts")
     parser.add_argument("--salt", dest="salt_filename", default=DEFAULT_SALT_FILENAME, help=f"Where the salt is stored, defaults to {DEFAULT_SALT_FILENAME}")
-    parser.add_argument("--checksum", dest="checksums_filename", default=DEFAULT_CHECKSUM_FILENAME, help=f"Where known checksums are stored, defaults to {DEFAULT_CHECKSUM_FILENAME}")
+    parser.add_argument("--checksum", dest="configs_filename", default=DEFAULT_CONFIGS_FILENAME, help=f"Where known configs are stored, defaults to {DEFAULT_CONFIGS_FILENAME}")
     parser.add_argument("--hash", dest="hash_method", default="sha512", help=", ".join(hashlib.algorithms_guaranteed))
     parser.add_argument("--encoding", dest="encoding_method", default="b85encode", help=", ".join(f"{p}encode" for p in ("b16", "b32", "b64", "b85", "a85")))
     parser.add_argument("--shortpass", help="Command-line provided shortpass, preferably for debugging purposes")
@@ -48,8 +46,8 @@ def main():
 
     # Get the shortpass from either args or by prompting the user
     if args.shortpass:
-        logging.warning(f"Careful! Shell histories log command-line parameters, like {args.shortpass}")
         shortpass = args.shortpass
+        logging.warning(f"Careful! Shell histories log command-line parameters, like {shortpass}")
     else:
         shortpass = getpass("Password? ")
         if args.add and shortpass != getpass("Password (confirm)? "):
@@ -57,13 +55,13 @@ def main():
 
     # Read in disk-stored values
     salt = read_salt(args.salt_filename)
-    checksums = read_checksums(args.checksums_filename)
+    configs = read_configs(args.configs_filename)
 
     # Iterate over all domains, get the long passwords, and display them
     results = {}
     for domain in sorted(args.domains):
         try:
-            results[domain] = get_longpass(domain, shortpass, salt, checksums, args)
+            results[domain] = get_longpass(domain, shortpass, salt, configs, args)
         except Exception as e:
             logging.error(e)
     if results:
@@ -71,7 +69,7 @@ def main():
 
     # Write any config changes back to disk
     if (args.add or args.modify_pepper) and results:
-        write_checksums(args.checksums_filename, checksums)
+        write_configs(args.configs_filename, configs)
 
 
 def ensure_script_is_simple():
@@ -100,29 +98,29 @@ def read_salt(salt_filename: str) -> bytes:
         logging.warning(f"Salt: Generating new salt into {salt_filename}")
         salt = secrets.token_bytes(1024 * 1024)
         open(os.path.expanduser(salt_filename), mode="wb").write(salt)
-    if len(salt) < SHORT_SALT_BYTES * 2:
+    if len(salt) < SALT_SPLIT_AT_BYTES * 10:
         raise Exception("Salt is unusually short")
     logging.debug(f"Salt: Read salt that smells like {smell(salt)}")
     return salt
 
 
-def read_checksums(checksums_filename: str) -> dict:
-    """Given a filename, returns a list of known checkums and their configurations"""
-    logging.debug(f"Checksums: Reading from {checksums_filename}")
+def read_configs(configs_filename: str) -> dict:
+    """Given a filename, returns a dict of checksums-to-configs"""
+    logging.debug(f"Checksums: Reading from {configs_filename}")
     try:
-        checksums = json.loads(open(os.path.expanduser(checksums_filename), mode="rb").read())
+        configs = json.loads(open(os.path.expanduser(configs_filename), mode="rb").read())
     except FileNotFoundError:
-        logging.warning(f"Checksums: File {checksums_filename} not found")
-        checksums = {}
-    logging.debug(f"Checksums: Read {len(checksums)} checksums")
-    return checksums
+        logging.warning(f"Checksums: File {configs_filename} not found")
+        configs = {}
+    logging.debug(f"Checksums: Read {len(configs)} configs")
+    return configs
 
 
-def write_checksums(checksums_filename: str, checksums: dict) -> None:
-    """Rewrites the checksums file with the most recent checksum content"""
-    logging.debug(f"Writing checksums to {checksums_filename}")
-    with open(os.path.expanduser(checksums_filename), mode="w") as checksums_file:
-        checksums_file.write(json.dumps(checksums, indent=4, sort_keys=True))
+def write_configs(configs_filename: str, configs: dict) -> None:
+    """Rewrites the configs file with the most recent checksum content"""
+    logging.debug(f"Writing configs to {configs_filename}")
+    with open(os.path.expanduser(configs_filename), mode="w") as configs_file:
+        configs_file.write(json.dumps(configs, indent=4, sort_keys=True))
 
 
 def get_digest(args: Namespace, *blocks) -> bytes:
@@ -131,44 +129,46 @@ def get_digest(args: Namespace, *blocks) -> bytes:
         block.encode() if isinstance(block, str) else block
         for block in list(blocks)
     )
-    if len(prehash) < SHORT_SALT_BYTES:
+    if len(prehash) < SALT_SPLIT_AT_BYTES:
         raise Exception("Combined blocks are unusually short")
     return getattr(hashlib, args.hash_method)(prehash).digest()
 
 
-def get_longpass(domain: str, shortpass: str, salt: bytes, checksums: dict, args: Namespace) -> str:
-    """Returns a long, complex, and unique password"""
-
-    # Split the salt in two
-    shortsalt, longsalt = salt[:SHORT_SALT_BYTES], salt[SHORT_SALT_BYTES:]
+def get_config(args: Namespace, configs: dict, domain: str, shortpass: str, shortsalt: bytes):
+    """Given a domain, shortpass, and salt, get or create a config"""
 
     # Compute the checksum
     digest = get_digest(args, domain, shortpass, shortsalt)
     checksum = base64.b85encode(digest).decode()[:20]
     logging.debug(f"{domain}: Checksum computed: {checksum}")
 
-    # Using the checksum, get or create a config
-    config = checksums.get(checksum)
-    if args.add:
-        if config:
-            logging.warning(f"{domain}: Checksum already present")
-        else:
-            config = {
-                "encoding": args.encoding_method,
-                "length": 20,
-            }
-            checksums[checksum] = config
-            logging.info(f"{domain}: Checksum added")
-    if not config:
-        raise Exception(f"{domain}: Checksum not found")
+    # Get or create a config
+    config = configs.get(checksum)
+    if config and args.add:
+        logging.warning(f"{domain}: Checksum already present")
+    elif not config:
+        if not args.add:
+            raise Exception(f"{domain}: Checksum not found")
+        config = {
+            "encoding": args.encoding_method,
+            "length": 20,
+        }
+        configs[checksum] = config
+        logging.info(f"{domain}: Checksum added")
 
     # If requested, modify the config's pepper
     if args.modify_pepper:
         logging.debug(f"{domain}: Pepper modified")
         config["pepper"] = base64.b64encode(secrets.token_bytes(4))[:4].decode()
 
-    # Now having obtained a config, generate and return a longpass
     logging.debug(f"{domain}: {config}")
+    return config
+
+
+def get_longpass(domain: str, shortpass: str, salt: bytes, configs: dict, args: Namespace) -> str:
+    """Returns a long, complex, and unique password"""
+    shortsalt, longsalt = salt[:SALT_SPLIT_AT_BYTES], salt[SALT_SPLIT_AT_BYTES:]
+    config = get_config(args, configs, domain, shortpass, shortsalt)
     digest = get_digest(args, domain, shortpass, longsalt, config.get("pepper", ""))
     encoding = getattr(base64, config["encoding"])(digest).decode()
     return "".join((
