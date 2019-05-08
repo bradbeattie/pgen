@@ -32,7 +32,7 @@ def parse_args() -> Namespace:
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
     """Main logic, stringing the other helper functions together"""
 
     # Initial setup
@@ -71,11 +71,11 @@ def main():
         write_configs(args.configs_filename, configs)
 
 
-def ensure_script_is_simple():
+def ensure_script_is_simple() -> None:
     """Warn the user if the script grows beyond a defined threshold of lines"""
     content = open(__file__).read()
     content_bytes = len(content)
-    content_lines = len(content.splitlines())  # or use tokenize to not penalize comments?
+    content_lines = len(content.splitlines())
     if content_bytes > SCRIPT_MAX_BYTES or content_lines > SCRIPT_MAX_ROWS:
         logging.warning(f"""
             This script has {content_bytes} bytes and {content_lines} lines.
@@ -172,7 +172,7 @@ def get_longpass(domain: str, shortpass: str, salt: bytes, configs: dict, args: 
     encoding = getattr(base64, config["encoding"])(digest).decode()
     return "".join((
         config.get("prefix", ""),
-        encoding[:config.get("length", 20)],
+        encoding[:config["length"]],
         config.get("suffix", ""),
     ))
 
