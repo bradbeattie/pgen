@@ -36,23 +36,15 @@ def main() -> None:
     """Main logic, stringing the other helper functions together"""
 
     # Initial setup
+    ensure_script_is_simple()
     args = parse_args()
     logging.basicConfig(
         format="%(levelname)9s: %(message)s",
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
-    ensure_script_is_simple()
-
-    # Get the shortpass from either args or by prompting the user
-    if args.shortpass:
-        shortpass = args.shortpass
-        logging.warning(f"Careful! Shell histories log command-line parameters, like {shortpass}")
-    else:
-        shortpass = getpass("Password? ")
-        if args.add and shortpass != getpass("Password (confirm)? "):
-            raise Exception("Provided passwords didn't match")
 
     # Read in disk-stored values
+    shortpass = get_shortpass(args)
     salt = read_salt(args.salt_filename)
     configs = read_configs(args.configs_filename)
 
@@ -71,13 +63,25 @@ def main() -> None:
         write_configs(args.configs_filename, configs)
 
 
+def get_shortpass(args: Namespace) -> str:
+    """Get the shortpass from either args or by prompting the user"""
+    if args.shortpass:
+        logging.warning(f"Careful! Shell histories log command-line parameters, like {shortpass}")
+        return args.shortpass
+    else:
+        shortpass = getpass("Password? ")
+        if args.add and shortpass != getpass("Password (confirm)? "):
+            raise Exception("Provided passwords didn't match")
+        return shortpass
+
+
 def ensure_script_is_simple() -> None:
     """Warn the user if the script grows beyond a defined threshold of lines"""
     content = open(__file__).read()
     content_bytes = len(content)
     content_lines = len(content.splitlines())
     if content_bytes > SCRIPT_MAX_BYTES or content_lines > SCRIPT_MAX_ROWS:
-        logging.warning(f"""
+        raise Exception(f"""
             This script has {content_bytes} bytes and {content_lines} lines.
             If it grows too complex, new users may not be able to easily audit it.
         """)
@@ -137,17 +141,17 @@ def get_config(args: Namespace, configs: dict, domain: str, shortpass: str, shor
     """Given a domain, shortpass, and salt, get or create a config"""
 
     # Compute the checksum
-    digest = get_digest(args, domain, shortpass, shortsalt)
-    checksum = base64.b85encode(digest).decode()[:20]
+    checksum_digest = get_digest(args, domain, shortpass, shortsalt)
+    checksum = base64.b85encode(checksum_digest).decode()[:20]
     logging.debug(f"{domain}: Checksum computed: {checksum}")
 
     # Get or create a config
     config = configs.get(checksum)
     if config and args.add:
         logging.warning(f"{domain}: Checksum already present")
-    elif not config:
-        if not args.add:
-            raise Exception(f"{domain}: Checksum not found")
+    if not config and not args.add:
+        raise Exception(f"{domain}: Checksum not found")
+    if not config:
         config = {
             "encoding": args.encoding_method,
             "length": 20,
@@ -168,8 +172,8 @@ def get_longpass(domain: str, shortpass: str, salt: bytes, configs: dict, args: 
     """Returns a long, complex, and unique password"""
     shortsalt, longsalt = salt[:SALT_SPLIT_AT_BYTES], salt[SALT_SPLIT_AT_BYTES:]
     config = get_config(args, configs, domain, shortpass, shortsalt)
-    digest = get_digest(args, domain, shortpass, longsalt, config.get("pepper", ""))
-    encoding = getattr(base64, config["encoding"])(digest).decode()
+    longpass_digest = get_digest(args, domain, shortpass, longsalt, config.get("pepper", ""))
+    encoding = getattr(base64, config["encoding"])(longpass_digest).decode()
     return "".join((
         config.get("prefix", ""),
         encoding[:config["length"]],
@@ -184,9 +188,7 @@ def display_results(results: dict) -> None:
         for domain, longpass in results.items():
             print(f"""{domain:>{width}}: {longpass}""")
     else:
-        # This edgecase has been separated out such that users might
-        # easily pipe single-domain passwords into their clipboard with
-        # whatever scripts their OS prefers (e.g. pbcopy, xclip, etc).
+        # Single-domain edgecase for easy piping to clipboard
         print("".join(results.values()))
 
 
