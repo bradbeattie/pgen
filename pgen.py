@@ -66,13 +66,13 @@ def main() -> None:
 def get_shortpass(args: Namespace) -> str:
     """Get the shortpass from either args or by prompting the user"""
     if args.shortpass:
+        shortpass = args.shortpass
         logging.warning(f"Careful! Shell histories log command-line parameters, like {shortpass}")
-        return args.shortpass
     else:
         shortpass = getpass("Password? ")
         if args.add and shortpass != getpass("Password (confirm)? "):
             raise Exception("Provided passwords didn't match")
-        return shortpass
+    return shortpass
 
 
 def ensure_script_is_simple() -> None:
