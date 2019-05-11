@@ -14,7 +14,7 @@ SCRIPT_MAX_ROWS = 200  # Don't bump this
 SCRIPT_MAX_BYTES = 8000  # Don't bump this
 SALT_SPLIT_AT_BYTES = 10000
 DEFAULT_SALT_FILENAME = "~/.pgen.salt"
-DEFAULT_CONFIGS_FILENAME = "~/.pgen.checksums"
+DEFAULT_CONFIGS_FILENAME = "~/.pgen.configs"
 
 
 def parse_args() -> Namespace:
@@ -42,8 +42,6 @@ def main() -> None:
         format="%(levelname)9s: %(message)s",
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
-
-    # Read in disk-stored values
     shortpass = get_shortpass(args)
     salt = read_salt(args.salt_filename)
     configs = read_configs(args.configs_filename)
