@@ -187,7 +187,7 @@ def display_results(results: dict) -> None:
             print(f"""{domain:>{width}}: {longpass}""")
     else:
         # Single-domain edgecase for easy piping to clipboard
-        print("".join(results.values()))
+        print("".join(results.values()), end="")
 
 
 if __name__ == "__main__":
